@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Frontend &amp; infrastructure</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.6;color:#1f2328;background:#fff}
+nav{background:#161616;padding:0 24px;display:flex;flex-wrap:wrap;gap:4px}
+nav a{color:#c6c6c6;text-decoration:none;padding:12px;font-size:13px}
+nav a:hover{color:#fff}nav a.on{color:#fff;border-bottom:2px solid #3b82d4}
+main{max-width:860px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:28px;margin:0 0 6px}h2{font-size:20px;margin:32px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}h3{font-size:16px;margin:20px 0 6px}
+.sub{color:#57606a;margin:0 0 24px}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{border:1px solid #e5e7eb;padding:7px 10px;text-align:left;vertical-align:top}th{background:#f7f8fa}
+code{background:#f7f8fa;padding:1px 5px;border-radius:3px;font-size:13px}
+.box{background:#f7f8fa;border:1px solid #e5e7eb;border-left:4px solid #3b82d4;padding:10px 14px;margin:14px 0}
+.pager{display:flex;justify-content:space-between;margin-top:40px;font-size:14px}
+footer{text-align:center;font-size:12px;color:#57606a;border-top:1px solid #e5e7eb;padding:14px;margin-top:20px}
+</style></head><body>
+<nav><a href="index.html">Summary</a><a href="repository.html">1. Repository &amp; documents</a><a href="purpose.html">2. Stated purpose</a><a href="backend.html">3. Backend</a><a class="on" href="frontend-infra.html">4. Frontend &amp; infrastructure</a><a href="alignment.html">5. Purpose vs. code</a><a href="issues.html">6. Issues</a><a href="recommendations.html">7. Recommendations</a></nav>
+<main>
+<h1>4. Frontend &amp; infrastructure</h1>
+<p class="sub">The React UI, the container image and the Compose deployment.</p>
+
+<h2>Frontend</h2>
+<p>A Create React App project (React 18, <code>react-scripts</code> 5, <code>@carbon/react</code>, <code>@carbon/icons-react</code>, Sass). <code>App.js</code> wraps a single <code>Dashboard</code> in the Carbon <code>g100</code> dark theme. The API address comes from <code>REACT_APP_API_BASE_URL</code>.</p>
+<table>
+<tr><th>Component</th><th>Role</th></tr>
+<tr><td><code>Dashboard.js</code></td><td>Login screen and tab host. Username only, no password. A user named <code>admin</code> gets role <code>admin</code>; every other name gets <code>user</code>. After login it loads the user's stored documents from <code>/user_exists_check</code>.</td></tr>
+<tr><td><code>HomeTab.js</code></td><td>Landing and overview content.</td></tr>
+<tr><td><code>DocumentTab.js</code></td><td>Upload, streaming progress modal (parses SSE <code>document_start</code>, <code>raw_content</code>, <code>summary_chunk</code> events), "View Details" and "Preview", delete via <code>DELETE /delete-file</code>.</td></tr>
+<tr><td><code>AIChatTab.js</code></td><td>Chat UI. Sends <code>query</code>, <code>user_id</code> and the selected <code>document_names</code> to <code>/ask-query</code>, renders the streamed text, has a 2-minute timeout, and keeps chat history in <code>localStorage</code> per username.</td></tr>
+<tr><td><code>SetupGuide.js</code></td><td>Two-step onboarding checklist (upload a document, explore AI features) with links to RHAIIS documentation.</td></tr>
+<tr><td><code>Header.js</code></td><td>Branding, user menu, and a service-health indicator that polls <code>/rhaiis/health</code> every 60 seconds.</td></tr>
+</table>
+<p>The chat client receives and displays plain text only. It has no data structure for citations or source references.</p>
+
+<h2>Container image (<code>Dockerfile</code>)</h2>
+<ul>
+<li>Base <code>s390x/ubuntu:noble</code>, matching IBM Z.</li>
+<li>Installs build tooling, llvm-15, Docker CE and PDF libraries, then <strong>builds Apache Arrow and PyTorch from source</strong>.</li>
+<li>Installs <code>requirements.txt</code> and copies in <code>backend</code> and <code>frontend</code>.</li>
+</ul>
+
+<h2>Deployment (<code>docker-compose.yml</code>)</h2>
+<table>
+<tr><th>Service</th><th>Image</th><th>Ports</th><th>Notes</th></tr>
+<tr><td><code>spyre-document-summarizer</code></td><td>built from <code>Dockerfile</code></td><td>3002 (React dev server), 8002 (uvicorn)</td><td>Runs <code>npm start</code> and <code>uvicorn --reload</code>. Sets <code>REACT_APP_API_BASE_URL</code> and <code>RHAIIS_API_BASE_URL=http://${HOST_IP:-localhost}:9000</code>. Installs extra pip packages at start-up.</td></tr>
+<tr><td><code>mongodb</code></td><td><code>s390x/mongo:4</code></td><td>27017</td><td>Document store.</td></tr>
+<tr><td><code>opensearch</code></td><td><code>phoenixsystemsag/opensearch:2.9.0</code></td><td>19200 &rarr; 9200</td><td>Vector index. The backend reaches it at <code>opensearch:9200</code> on the Compose network through the default in <code>config.py</code>.</td></tr>
+</table>
+
+<h2>Dependencies (<code>requirements.txt</code>)</h2>
+<p>The file mixes needed libraries (FastAPI, LangChain, OpenSearch, PyMongo, PyPDF2, python-docx, langdetect) with many that this code does not use (for example xgboost, shap, jupyterlab, ibm_db_sa, pymilvus, elasticsearch). <code>torch</code> and <code>sentence-transformers</code> are commented out because the image builds torch itself. Packages used by the code, such as <code>aiohttp</code>, <code>rouge-score</code>, <code>colorama</code> and <code>Pillow</code>, are not listed and are instead installed at container start-up by Compose.</p>
+
+<div class="pager"><a href="backend.html">&larr; Backend</a><a href="alignment.html">Next: Purpose vs. code &rarr;</a></div>
+</main>
+<footer>Made with IBM Bob</footer>
+</body></html>

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Repository Review: Document Intelligence with RHAIIS on IBM Spyre</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.6;color:#1f2328;background:#fff}
+nav{background:#161616;padding:0 24px;display:flex;flex-wrap:wrap;gap:4px}
+nav a{color:#c6c6c6;text-decoration:none;padding:12px;font-size:13px}
+nav a:hover{color:#fff}nav a.on{color:#fff;border-bottom:2px solid #3b82d4}
+main{max-width:860px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:28px;margin:0 0 6px}h2{font-size:20px;margin:32px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}h3{font-size:16px;margin:20px 0 6px}
+.sub{color:#57606a;margin:0 0 24px}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{border:1px solid #e5e7eb;padding:7px 10px;text-align:left;vertical-align:top}th{background:#f7f8fa}
+code{background:#f7f8fa;padding:1px 5px;border-radius:3px;font-size:13px}
+pre{background:#f7f8fa;border:1px solid #e5e7eb;padding:12px;overflow:auto;font-size:13px}
+.box{background:#f7f8fa;border:1px solid #e5e7eb;border-left:4px solid #3b82d4;padding:10px 14px;margin:14px 0}
+.ok{color:#1a7f37;font-weight:600}.part{color:#9a6700;font-weight:600}.bad{color:#cf222e;font-weight:600}
+.pager{display:flex;justify-content:space-between;margin-top:40px;font-size:14px}
+footer{text-align:center;font-size:12px;color:#57606a;border-top:1px solid #e5e7eb;padding:14px;margin-top:20px}
+</style></head><body>
+<nav><a class="on" href="index.html">Summary</a><a href="repository.html">1. Repository &amp; documents</a><a href="purpose.html">2. Stated purpose</a><a href="backend.html">3. Backend</a><a href="frontend-infra.html">4. Frontend &amp; infrastructure</a><a href="alignment.html">5. Purpose vs. code</a><a href="issues.html">6. Issues</a><a href="recommendations.html">7. Recommendations</a></nav>
+<main>
+<h1>Repository Review</h1>
+<p class="sub">AI on IBM Z: Document Intelligence with Red Hat AI Inference Server (RHAIIS) leveraging IBM Spyre. Review of documents and code, and a check of the code against the stated purpose.</p>
+
+<h2>Verdict</h2>
+<div class="box"><strong>The code largely delivers the application described in the solution template</strong>: upload documents, get a streamed summary, store them in MongoDB, index chunks in OpenSearch, and chat over them (RAG) using a Granite model served by RHAIIS. <strong>It does not implement several claims in the template.</strong> The most important gap is that nothing in the application targets the Spyre accelerator. Spyre is reached only indirectly, as the hardware behind the separately deployed RHAIIS vLLM container. Embeddings, extraction, chunking and vector search all run in the app container.</div>
+
+<h2>Scorecard</h2>
+<table>
+<tr><th>Area</th><th>Rating</th><th>Short reason</th></tr>
+<tr><td>Upload &rarr; summarize flow</td><td class="ok">Matches</td><td>SSE-streamed summary via RHAIIS (<code>/upload-files</code>).</td></tr>
+<tr><td>MongoDB document store</td><td class="ok">Matches</td><td>Per-user collections in <code>document_store</code>.</td></tr>
+<tr><td>OpenSearch vector index + RAG chat</td><td class="ok">Matches</td><td>Embeds with a Granite embedding model, retrieves the top 5 chunks.</td></tr>
+<tr><td>Granite 3.3-8B on RHAIIS</td><td class="part">Partly</td><td>Model name and context limits differ from the documented server command.</td></tr>
+<tr><td>"Semantically meaningful" chunking</td><td class="part">Partly</td><td>Fixed line-based chunks (25 lines, 4 overlap).</td></tr>
+<tr><td>Grounded answers that cite sources</td><td class="part">Partly</td><td>Excerpts and names go into the prompt; the API returns plain text with no citation data.</td></tr>
+<tr><td>Spyre accelerates extraction, embeddings, vector search</td><td class="bad">Not in code</td><td>No Spyre-specific code; only LLM inference can use it.</td></tr>
+<tr><td>Role-aware summaries</td><td class="bad">Not in code</td><td>Only language-aware. A UI-only "admin" flag exists.</td></tr>
+<tr><td>Guardrails, policy, observability</td><td class="bad">Minimal</td><td>Printed latency and tokens/s metrics only.</td></tr>
+</table>
+
+<h2>Report pages</h2>
+<ol>
+<li><a href="repository.html">Repository &amp; documents</a>: layout and the role of each file.</li>
+<li><a href="purpose.html">Stated purpose</a>: what the solution template and README promise.</li>
+<li><a href="backend.html">Backend</a>: FastAPI service, RAG, storage, image pipeline.</li>
+<li><a href="frontend-infra.html">Frontend &amp; infrastructure</a>: React/Carbon UI, Dockerfile, Compose.</li>
+<li><a href="alignment.html">Purpose vs. code</a>: claim-by-claim matrix.</li>
+<li><a href="issues.html">Issues</a>: defects, risks, documentation inconsistencies.</li>
+<li><a href="recommendations.html">Recommendations</a>: prioritised actions.</li>
+</ol>
+<p class="sub">Method: static review of the repository files. The application was not built or run, so runtime behaviour is inferred from the source.</p>
+<div class="pager"><span></span><a href="repository.html">Next: Repository &amp; documents &rarr;</a></div>
+</main>
+<footer>Made with IBM Bob</footer>
+</body></html>

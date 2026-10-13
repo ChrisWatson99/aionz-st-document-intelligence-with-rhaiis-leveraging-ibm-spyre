@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Purpose vs. code</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.6;color:#1f2328;background:#fff}
+nav{background:#161616;padding:0 24px;display:flex;flex-wrap:wrap;gap:4px}
+nav a{color:#c6c6c6;text-decoration:none;padding:12px;font-size:13px}
+nav a:hover{color:#fff}nav a.on{color:#fff;border-bottom:2px solid #3b82d4}
+main{max-width:860px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:28px;margin:0 0 6px}h2{font-size:20px;margin:32px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}h3{font-size:16px;margin:20px 0 6px}
+.sub{color:#57606a;margin:0 0 24px}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{border:1px solid #e5e7eb;padding:7px 10px;text-align:left;vertical-align:top}th{background:#f7f8fa}
+code{background:#f7f8fa;padding:1px 5px;border-radius:3px;font-size:13px}
+pre{background:#f7f8fa;border:1px solid #e5e7eb;padding:12px;overflow:auto;font-size:13px}
+.box{background:#f7f8fa;border:1px solid #e5e7eb;border-left:4px solid #3b82d4;padding:10px 14px;margin:14px 0}
+.ok{color:#1a7f37;font-weight:600}.part{color:#9a6700;font-weight:600}.bad{color:#cf222e;font-weight:600}
+.pager{display:flex;justify-content:space-between;margin-top:40px;font-size:14px}
+footer{text-align:center;font-size:12px;color:#57606a;border-top:1px solid #e5e7eb;padding:14px;margin-top:20px}
+</style></head><body>
+<nav><a href="index.html">Summary</a><a href="repository.html">1. Repository &amp; documents</a><a href="purpose.html">2. Stated purpose</a><a href="backend.html">3. Backend</a><a href="frontend-infra.html">4. Frontend &amp; infrastructure</a><a class="on" href="alignment.html">5. Purpose vs. code</a><a href="issues.html">6. Issues</a><a href="recommendations.html">7. Recommendations</a></nav>
+<main>
+<h1>5. Purpose vs. code</h1>
+<p class="sub">Each claim in the solution template and README is compared with what the source code does. This is a static review; the application was not built or run.</p>
+
+<h2>Claim-by-claim matrix</h2>
+<table>
+<tr><th style="width:30%">Claim in docx / README</th><th>Evidence in code</th><th style="width:11%">Status</th></tr>
+<tr><td>Users upload documents and receive a summary</td><td><code>POST /upload-files</code> extracts text, builds a prompt and streams the summary over SSE (<code>backend/server.py</code>, <code>rag.py</code>, <code>rhaiis_utils.py</code>).</td><td class="ok">Matches</td></tr>
+<tr><td>Documents are stored in MongoDB</td><td><code>mongo_utils.py</code>: database <code>document_store</code>, collection <code>user_&lt;id&gt;</code>, with content, summary, timestamp and ROUGE score. Duplicates are skipped.</td><td class="ok">Matches</td></tr>
+<tr><td>Chunks are embedded into an OpenSearch vector index</td><td><code>opensearch_utils.py</code> uses <code>HuggingFaceEmbeddings</code> with <code>ibm-granite/granite-embedding-278m-multilingual</code> (<code>config.py</code>) and indexes into <code>user_&lt;id&gt;</code>.</td><td class="ok">Matches</td></tr>
+<tr><td>RAG chat over uploaded documents (AI Assistant tab)</td><td><code>POST /ask-query</code> retrieves top-5 chunks, filtered by document name with fallback, and streams the answer. <code>AIChatTab.js</code> consumes it.</td><td class="ok">Matches</td></tr>
+<tr><td>UI flow: login, upload, View Details / Preview, AI Assistant, port 3002</td><td><code>Dashboard.js</code>, <code>DocumentTab.js</code>, <code>AIChatTab.js</code>; compose maps 3002 to the dev server.</td><td class="ok">Matches</td></tr>
+<tr><td>Deployment with <code>podman-compose up --build -d</code></td><td><code>docker-compose.yml</code> defines the app, MongoDB and OpenSearch. It also depends on a separately running RHAIIS endpoint on port 9000.</td><td class="part">Partly</td></tr>
+<tr><td>Granite 3.3-8B instruct served by RHAIIS; server started with <code>--model ibm-ai-platform/micro-g3.3-8b-instruct-1b --max_model_len=2048</code></td><td>The client requests <code>ibm-granite/granite-3.3-8b-instruct</code>, allows <code>MAX_TOKENS=10000</code> and 10,000-character prompts, and summaries use up to about 16,000 characters of content. The docx command sets no <code>--served-model-name</code>, so the model name sent may not match.</td><td class="part">Partly</td></tr>
+<tr><td>RHAIIS reachable on the documented port</td><td>The docx vLLM command has no <code>--port</code> (default 8000). Compose and code use 9000.</td><td class="part">Partly</td></tr>
+<tr><td>"Semantically meaningful" segments</td><td><code>chunk_code</code> in <code>utils.py</code> splits by lines (<code>CHUNK_SIZE=25</code>, <code>CHUNK_OVERLAP=4</code>). It ignores sentence, paragraph and heading boundaries.</td><td class="part">Partly</td></tr>
+<tr><td>Documents go to MongoDB first, then extraction and chunking</td><td>The summary is streamed first. Storage and indexing happen afterwards (images in a background task).</td><td class="part">Partly</td></tr>
+<tr><td>Grounded answers, "cite or traceable"</td><td>Prompts contain excerpts and document names, but <code>/ask-query</code> returns plain text and the UI shows no sources.</td><td class="part">Partly</td></tr>
+<tr><td>Spyre accelerates extraction, chunking, embedding generation and vector search</td><td>No Spyre-specific code exists in the application. Embeddings, CLIP, captioning, extraction and chunking run in the app container (CPU or CUDA). Vector search runs in the OpenSearch container. Spyre can only serve LLM inference through the separate RHAIIS container.</td><td class="bad">Not in code</td></tr>
+<tr><td>Role-aware summaries</td><td>Prompts depend on language only. The <code>admin</code> / <code>user</code> role in <code>Dashboard.js</code> is a UI flag.</td><td class="bad">Not in code</td></tr>
+<tr><td>Guardrails, policy and observability</td><td>Only <code>SimpleMetricsTracker</code> (time to first token, tokens/s) printed to the log. No content filtering, policy checks or metrics export.</td><td class="bad">Minimal</td></tr>
+<tr><td>Approximately 45 minutes to deploy</td><td>The Dockerfile builds llvm, Apache Arrow and PyTorch from source on <code>s390x</code>. This is very likely far longer.</td><td class="bad">Doubtful</td></tr>
+</table>
+
+<h2>Spyre gap analysis</h2>
+<table>
+<tr><th>Pipeline stage</th><th>Where it actually runs</th><th>Can use Spyre?</th></tr>
+<tr><td>Text extraction (PyPDF2, python-docx)</td><td>App container, CPU</td><td>No</td></tr>
+<tr><td>Chunking</td><td>App container, CPU</td><td>No</td></tr>
+<tr><td>Embedding generation (Granite embedding, CLIP)</td><td>App container, local <code>HuggingFaceEmbeddings</code> on CPU or CUDA</td><td>Not as written</td></tr>
+<tr><td>Vector search</td><td>OpenSearch container (<code>phoenixsystemsag/opensearch:2.9.0</code>)</td><td>No</td></tr>
+<tr><td>Summarization and chat generation</td><td>RHAIIS vLLM container (<code>vllm-spyre</code>)</td><td class="ok">Yes</td></tr>
+</table>
+<div class="box">Only the generation step is accelerated. The statement that Spyre accelerates extraction, chunking, embeddings and vector search is not supported by this repository. Either the wording should change or embeddings should be served from a Spyre-backed endpoint.</div>
+
+<h2>Pipeline order: documented vs. implemented</h2>
+<pre>Documented:   upload → MongoDB → extract → chunk → embed → OpenSearch
+                                   └→ summarizer → RHAIIS
+
+Implemented:  upload → extract → summarize (RHAIIS, streamed to UI)
+                              → MongoDB (doc + summary + ROUGE)
+                              → chunk → embed → OpenSearch   (images: background task)</pre>
+
+<h2>Additions beyond the documented scope</h2>
+<ul>
+<li>Image upload with CLIP embeddings and Granite Vision / BLIP captions, indexed in <code>user_&lt;id&gt;_images</code>.</li>
+<li>Prompts in seven languages (en, fr, pt, hi, de, it, el).</li>
+<li>ROUGE scoring of summaries and a metrics tracker.</li>
+<li>Per-user data separation by collection and index name, a dashboard and a setup guide.</li>
+</ul>
+
+<div class="pager"><a href="frontend-infra.html">&larr; 4. Frontend &amp; infrastructure</a><a href="issues.html">6. Issues &rarr;</a></div>
+</main>
+<footer>Made with IBM Bob</footer>
+</body></html>

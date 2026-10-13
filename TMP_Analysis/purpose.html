@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Stated purpose</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.6;color:#1f2328;background:#fff}
+nav{background:#161616;padding:0 24px;display:flex;flex-wrap:wrap;gap:4px}
+nav a{color:#c6c6c6;text-decoration:none;padding:12px;font-size:13px}
+nav a:hover{color:#fff}nav a.on{color:#fff;border-bottom:2px solid #3b82d4}
+main{max-width:860px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:28px;margin:0 0 6px}h2{font-size:20px;margin:32px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}h3{font-size:16px;margin:20px 0 6px}
+.sub{color:#57606a;margin:0 0 24px}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{border:1px solid #e5e7eb;padding:7px 10px;text-align:left;vertical-align:top}th{background:#f7f8fa}
+code{background:#f7f8fa;padding:1px 5px;border-radius:3px;font-size:13px}
+.box{background:#f7f8fa;border:1px solid #e5e7eb;border-left:4px solid #3b82d4;padding:10px 14px;margin:14px 0}
+.pager{display:flex;justify-content:space-between;margin-top:40px;font-size:14px}
+footer{text-align:center;font-size:12px;color:#57606a;border-top:1px solid #e5e7eb;padding:14px;margin-top:20px}
+</style></head><body>
+<nav><a href="index.html">Summary</a><a href="repository.html">1. Repository &amp; documents</a><a class="on" href="purpose.html">2. Stated purpose</a><a href="backend.html">3. Backend</a><a href="frontend-infra.html">4. Frontend &amp; infrastructure</a><a href="alignment.html">5. Purpose vs. code</a><a href="issues.html">6. Issues</a><a href="recommendations.html">7. Recommendations</a></nav>
+<main>
+<h1>2. Stated purpose</h1>
+<p class="sub">What <code>Document_Intelligence_RHAIIS_solution_template.docx</code> and the README say this solution is for.</p>
+
+<h2>Business goal</h2>
+<p>Summarize documents and provide a RAG chatbot over them, running on an IBM z17 with the IBM Spyre AI accelerator and Red Hat AI Inference Server, so the data stays on the IBM Z platform.</p>
+
+<h2>Pipeline as described</h2>
+<ol>
+<li>Documents are stored in MongoDB.</li>
+<li>Information is extracted and split into chunks.</li>
+<li>Two paths run on the z17: a <strong>summarizer</strong> and a <strong>RAG pipeline</strong> that computes embeddings and stores them in an OpenSearch vector index.</li>
+<li>A <strong>Granite 3.3-8B instruct</strong> model served by RHAIIS produces summaries and chat answers.</li>
+<li>Chat answers are grounded in retrieved content and "cite or are traceable" to the sources.</li>
+</ol>
+
+<h2>Claims about Spyre</h2>
+<ul>
+<li>Spyre "accelerates the data preparation and orchestration on-platform": extraction, chunking, embedding generation and vector search.</li>
+<li>Card facts quoted: 32 cores, Samsung 5 nm, up to 128 GB LPDDR5 per card, 300+ TOPS, 75 W.</li>
+</ul>
+
+<h2>Other capability claims</h2>
+<ul>
+<li>"Semantically meaningful" segments.</li>
+<li>Role-aware summaries.</li>
+<li>Guardrails, policy and observability.</li>
+</ul>
+
+<h2>Prerequisites</h2>
+<table>
+<tr><th>Type</th><th>Requirement</th></tr>
+<tr><td>Hardware</td><td>IBM z17 with Spyre cards.</td></tr>
+<tr><td>Platform</td><td>Secure Service Container LPARs (1 ACC, 2 SSA), ACC, SSA, Ansible.</td></tr>
+<tr><td>OS and tools</td><td>Linux LPAR with RHEL 9.6, Podman, Git, a Hugging Face token, access to <code>registry.redhat.io</code>.</td></tr>
+<tr><td>Packages</td><td><code>git</code>, <code>podman</code>, <code>podman-compose</code>, <code>huggingface_hub</code>.</td></tr>
+</table>
+
+<h2>RHAIIS setup in the template</h2>
+<ul>
+<li>Pull <code>registry.redhat.io/rhaiis/vllm-spyre:3.2.5</code>.</li>
+<li>Run it with the <code>/dev/vfio</code> devices and environment variables such as <code>FLEX_DEVICE=VF</code>, <code>VLLM_SPYRE_USE_CB=1</code>, <code>TORCH_SENDNN_CACHE_*</code> and <code>VLLM_SPYRE_REQUIRE_PRECOMPILED_DECODERS=1</code>.</li>
+<li>Edit the senlib config with <code>jq</code>.</li>
+<li>Start the OpenAI-compatible vLLM server with <code>--model ibm-ai-platform/micro-g3.3-8b-instruct-1b --max_model_len=2048 --max-num-seqs=4 --tensor-parallel-size=2</code>.</li>
+</ul>
+
+<h2>Application deployment and use</h2>
+<ol>
+<li>Clone the sample (<code>spyre_enhanced_document_summarizer</code>) and run <code>podman-compose up --build -d</code>.</li>
+<li>Open <code>http://localhost:3002</code> and log in with a username.</li>
+<li>Upload documents. A summary is produced automatically. Use "View Details" and "Preview".</li>
+<li>Use the "AI Assistant" tab to ask questions.</li>
+</ol>
+<p>The template estimates about 45 minutes for the complete setup.</p>
+
+<div class="box">The template is an <strong>operator guide plus value narrative</strong>. Its testable promises are the pipeline steps, the model, the ports and the user flow, plus the Spyre-acceleration claims. <a href="alignment.html">Page 5</a> tests each one.</div>
+
+<div class="pager"><a href="repository.html">&larr; Repository &amp; documents</a><a href="backend.html">Next: Backend &rarr;</a></div>
+</main>
+<footer>Made with IBM Bob</footer>
+</body></html>

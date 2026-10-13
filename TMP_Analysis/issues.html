@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Issues</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.6;color:#1f2328;background:#fff}
+nav{background:#161616;padding:0 24px;display:flex;flex-wrap:wrap;gap:4px}
+nav a{color:#c6c6c6;text-decoration:none;padding:12px;font-size:13px}
+nav a:hover{color:#fff}nav a.on{color:#fff;border-bottom:2px solid #3b82d4}
+main{max-width:860px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:28px;margin:0 0 6px}h2{font-size:20px;margin:32px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}h3{font-size:16px;margin:20px 0 6px}
+.sub{color:#57606a;margin:0 0 24px}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{border:1px solid #e5e7eb;padding:7px 10px;text-align:left;vertical-align:top}th{background:#f7f8fa}
+code{background:#f7f8fa;padding:1px 5px;border-radius:3px;font-size:13px}
+pre{background:#f7f8fa;border:1px solid #e5e7eb;padding:12px;overflow:auto;font-size:13px}
+.box{background:#f7f8fa;border:1px solid #e5e7eb;border-left:4px solid #3b82d4;padding:10px 14px;margin:14px 0}
+.ok{color:#1a7f37;font-weight:600}.part{color:#9a6700;font-weight:600}.bad{color:#cf222e;font-weight:600}
+.pager{display:flex;justify-content:space-between;margin-top:40px;font-size:14px}
+footer{text-align:center;font-size:12px;color:#57606a;border-top:1px solid #e5e7eb;padding:14px;margin-top:20px}
+</style></head><body>
+<nav><a href="index.html">Summary</a><a href="repository.html">1. Repository &amp; documents</a><a href="purpose.html">2. Stated purpose</a><a href="backend.html">3. Backend</a><a href="frontend-infra.html">4. Frontend &amp; infrastructure</a><a href="alignment.html">5. Purpose vs. code</a><a class="on" href="issues.html">6. Issues</a><a href="recommendations.html">7. Recommendations</a></nav>
+<main>
+<h1>6. Issues</h1>
+<p class="sub">Defects, risks and inconsistencies found by reading the code and documents. Line numbers are approximate.</p>
+
+<h2>Functional bugs</h2>
+<table>
+<tr><th style="width:5%">#</th><th style="width:30%">Issue</th><th style="width:25%">Location</th><th>Impact</th></tr>
+<tr><td>F1</td><td>Fake RHAIIS health check with a hardcoded IP</td><td><code>backend/server.py</code> ~1004-1030 (<code>is_rhaiis_endpoint_healthy</code>)</td><td>It targets <code>http://129.40.90.163:9000/v1/completions</code> but sends no request. It always returns <code>reachable: True</code> because <code>200 in [200,400,422]</code>. The exception handlers are dead code. The header indicator is always green.</td></tr>
+<tr><td>F2</td><td>Summary language detection is wrong</td><td><code>backend/rag.py</code> ~199 and ~213-251 (<code>build_summarize_prompt</code>)</td><td><code>detect_language_with_confidence</code> returns a list of dicts, but the result is compared with strings such as <code>"fr"</code>. Every document falls through to the English prompt, so the multilingual summaries do not work. <code>build_rag_prompt</code> does it correctly.</td></tr>
+<tr><td>F3</td><td>Same comparison flaw in the image-only prompt</td><td><code>backend/rag.py</code> ~279-339 (<code>build_image_only_prompt</code>)</td><td>Not used by <code>server.py</code> today, so latent.</td></tr>
+<tr><td>F4</td><td>Python 3.12-only f-string syntax</td><td><code>backend/server.py</code>, <code>raw_content</code> yield</td><td>Nested same-type quotes in an f-string fail to parse on Python 3.11 and earlier.</td></tr>
+<tr><td>F5</td><td>GET then POST fallback for <code>/user_exists_check</code></td><td><code>frontend/src/components/Dashboard.js</code> vs. <code>server.py</code></td><td>The backend defines only POST. The frontend first sends a request that is bound to fail with 405.</td></tr>
+<tr><td>F6</td><td>Context overflow risk</td><td><code>rhaiis_utils.py</code>, <code>rag.py</code> vs. docx <code>--max_model_len=2048</code></td><td>Prompts of up to 10,000 characters plus up to 10,000 generated tokens exceed a 2048-token window.</td></tr>
+</table>
+
+<h2>Security</h2>
+<table>
+<tr><th style="width:5%">#</th><th style="width:30%">Issue</th><th style="width:25%">Location</th><th>Impact</th></tr>
+<tr><td>S1</td><td>No real authentication or authorization</td><td><code>Dashboard.js</code>, all endpoints in <code>server.py</code></td><td>The user id is a username typed in the browser and sent in requests. Any caller can read or delete another user's documents by changing <code>user_id</code>. The <code>admin</code> name is only a UI flag.</td></tr>
+<tr><td>S2</td><td>Permissive CORS</td><td><code>server.py</code> ~151</td><td><code>allow_origins=["*"]</code> with <code>allow_credentials=True</code>.</td></tr>
+<tr><td>S3</td><td>TLS verification disabled</td><td><code>rhaiis_utils.py</code></td><td><code>ssl=False</code> and <code>verify=False</code> expose traffic to the inference server to interception.</td></tr>
+<tr><td>S4</td><td>Uploads written to <code>/tmp/&lt;basename&gt;</code></td><td><code>server.py</code> upload handler</td><td>Concurrent users with the same file name overwrite each other. Sensitive files stay on disk in a shared directory.</td></tr>
+<tr><td>S5</td><td>Chat history in <code>localStorage</code></td><td><code>AIChatTab.js</code></td><td>Conversation content persists unencrypted in the browser and is shared by anyone using the same profile.</td></tr>
+<tr><td>S6</td><td>No guardrails</td><td>Whole backend</td><td>No input or output filtering, no prompt-injection handling, although the docx mentions guardrails and policy.</td></tr>
+</table>
+
+<h2>Operability</h2>
+<table>
+<tr><th style="width:5%">#</th><th style="width:30%">Issue</th><th style="width:25%">Location</th><th>Impact</th></tr>
+<tr><td>O1</td><td>Development servers in the compose file</td><td><code>docker-compose.yml</code></td><td><code>npm start</code> and <code>uvicorn --reload</code> are used as the runtime.</td></tr>
+<tr><td>O2</td><td>Work repeated on every start</td><td><code>docker-compose.yml</code></td><td><code>rm -rf node_modules</code> and runtime <code>pip install</code> of extra packages slow down and destabilize startup.</td></tr>
+<tr><td>O3</td><td>Heavy source builds</td><td><code>Dockerfile</code></td><td>llvm-15, Docker CE, Apache Arrow and PyTorch are compiled from source on <code>s390x</code>. Build time is long, contradicting the "about 45 minutes" claim.</td></tr>
+<tr><td>O4</td><td>Inaccurate <code>requirements.txt</code></td><td><code>requirements.txt</code></td><td>Many unused heavy packages (xgboost, shap, jupyterlab, ibm_db_sa, pymilvus, elasticsearch). Needed ones are missing: <code>aiohttp</code>, <code>rouge-score</code>, <code>colorama</code>, <code>Pillow</code>.</td></tr>
+<tr><td>O5</td><td>OpenSearch without security or TLS</td><td><code>docker-compose.yml</code>, <code>config.py</code></td><td>Plain HTTP and no credentials are configured.</td></tr>
+<tr><td>O6</td><td>Deprecated LangChain imports</td><td><code>opensearch_utils.py</code></td><td><code>langchain.embeddings</code>, <code>langchain.vectorstores</code>, <code>langchain.schema</code> will break on upgrade.</td></tr>
+<tr><td>O7</td><td>No tests, no metrics export</td><td>Repository</td><td>Regressions such as F2 go unnoticed.</td></tr>
+</table>
+
+<h2>Documentation and housekeeping</h2>
+<table>
+<tr><th style="width:5%">#</th><th>Issue</th></tr>
+<tr><td>D1</td><td>The README link labelled "official AI Solution Template PDF" points to the <code>.docx</code>.</td></tr>
+<tr><td>D2</td><td>The docx refers to a folder named <code>spyre_enhanced_document_summarizer</code> on github.ibm.com, which differs from this repository.</td></tr>
+<tr><td>D3</td><td>The docx command contains an en-dash: <code>podman-compose up –build</code>, which fails if pasted.</td></tr>
+<tr><td>D4</td><td>The docx server command and the code disagree on model name, context length and port (see <a href="alignment.html">page 5</a>).</td></tr>
+<tr><td>D5</td><td>The docstring in <code>rhaiis_utils.py</code> expands RHAIIS as "Remote Hosted AI Inference Service". It is Red Hat AI Inference Server.</td></tr>
+<tr><td>D6</td><td>Misnamed functions: <code>chunk_code</code> and <code>ingest_code_to_os</code> process documents, not code.</td></tr>
+<tr><td>D7</td><td>Untracked <code>.DS_Store</code> files and the Word lock file <code>~$cument_Intelligence_RHAIIS_solution_template.docx</code>; no <code>.gitignore</code> entries for them.</td></tr>
+<tr><td>D8</td><td><code>frontend/package.json</code> still has the name <code>my-app</code>.</td></tr>
+</table>
+
+<div class="pager"><a href="alignment.html">&larr; 5. Purpose vs. code</a><a href="recommendations.html">7. Recommendations &rarr;</a></div>
+</main>
+<footer>Made with IBM Bob</footer>
+</body></html>
