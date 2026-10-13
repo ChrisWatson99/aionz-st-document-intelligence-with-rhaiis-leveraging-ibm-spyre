@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>AI Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.6;color:#1f2328;background:#fff}
+nav{background:#161616;padding:0 24px;display:flex;flex-wrap:wrap;gap:4px}
+nav a{color:#c6c6c6;text-decoration:none;padding:12px;font-size:13px}
+nav a:hover{color:#fff}nav a.on{color:#fff;border-bottom:2px solid #3b82d4}
+main{max-width:900px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:28px;margin:0 0 6px}
+h2{font-size:22px;margin:40px 0 10px;padding-bottom:6px;border-bottom:2px solid #e5e7eb}
+h3{font-size:16px;margin:24px 0 6px;color:#1f2328}
+.sub{color:#57606a;margin:0 0 28px;font-size:15px}
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
+th,td{border:1px solid #e5e7eb;padding:8px 11px;text-align:left;vertical-align:top}
+th{background:#f7f8fa;font-weight:600}
+.tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:10px;margin-right:4px;vertical-align:middle}
+.c0{background:#dafbe1;color:#116329}
+.c1{background:#ddf4ff;color:#0550ae}
+.c2{background:#fff8c5;color:#7d4e00}
+.cx{background:#ffd7d5;color:#82171a}
+.box{background:#f7f8fa;border:1px solid #e5e7eb;border-left:4px solid #3b82d4;padding:12px 16px;margin:20px 0;font-size:14px}
+.warn{border-left-color:#cf222e;background:#fff5f5}
+.note{border-left-color:#9a6700;background:#fffbdd}
+.ok{border-left-color:#1a7f37;background:#f0fff4}
+.pager{display:flex;justify-content:space-between;margin-top:48px;font-size:14px}
+footer{text-align:center;font-size:12px;color:#57606a;border-top:1px solid #e5e7eb;padding:14px;margin-top:20px}
+ul{margin:6px 0 6px 20px;padding:0}li{margin-bottom:4px}
+</style></head><body>
+
+<nav>
+  <a href="index.html">Summary</a>
+  <a href="repository.html">1. Repository &amp; documents</a>
+  <a href="purpose.html">2. Stated purpose</a>
+  <a href="backend.html">3. Backend</a>
+  <a href="frontend-infra.html">4. Frontend &amp; infrastructure</a>
+  <a href="alignment.html">5. Purpose vs. code</a>
+  <a href="issues.html">6. Issues</a>
+  <a href="recommendations.html">7. Recommendations</a>
+  <a href="change-review.html">8. Change review</a>
+  <a class="on" href="ai-review.html">9. AI review</a>
+</nav>
+
+<main>
+<h1>9. AI Review</h1>
+<p class="sub">
+  How the AI part of the solution works, how well it serves the stated purpose, and how it could be improved
+  <em>without</em> needing a bigger model or noticeably more processing. No code is shown. This review is based on static
+  reading of the source; the application was not built or run on Spyre, so no measured timings or accuracy figures are claimed.
+</p>
+
+<div class="box note">
+  <strong>The capacity constraint behind every recommendation here.</strong>
+  The documented platform runs one Granite 3.3-8B model on two Spyre cards with a 2,048-token context window
+  (<code>--max_model_len=2048</code>) and at most 4 simultaneous requests (<code>--max-num-seqs=4</code>).
+  Everything else (embeddings, chunking, text extraction, image models) runs on the s390x CPU of the backend container.
+  Each suggestion below is therefore rated for how much extra work it adds:
+  <br>
+  <span class="tag c0">NO EXTRA COST</span> saves work or costs nothing &nbsp;
+  <span class="tag c1">SMALL</span> negligible CPU, no extra model calls &nbsp;
+  <span class="tag c2">MODERATE</span> extra model calls or storage, should be capped &nbsp;
+  <span class="tag cx">AVOID</span> not suitable for this platform
+</div>
+
+<!-- ============================================================ -->
+<h2>9.1 &nbsp;How the AI pipeline works today</h2>
+<p>
+  The solution is a classic <strong>Retrieval-Augmented Generation (RAG)</strong> design: documents are cut into pieces and
+  turned into numeric "fingerprints" (embeddings); at question time the pieces most similar to the question are fetched
+  and given to the language model together with the question, so the model answers from the user's own material rather
+  than from its general training.
+</p>
+<table>
+<tr><th>Stage</th><th>What happens</th><th>Where it runs</th><th>Main file</th></tr>
+<tr><td>1. Extraction</td><td>Text is read from PDF, DOCX, TXT etc.</td><td>Backend CPU</td><td><code>utils.py</code></td></tr>
+<tr><td>2. Summary</td><td>The start of the document is sent to the LLM to produce a summary, <em>before</em> the file is stored.</td><td><strong>Spyre (RHAIIS)</strong></td><td><code>rag.py</code>, <code>server.py</code></td></tr>
+<tr><td>3. Chunking</td><td>Text is cut into overlapping blocks of 25 lines (4 lines overlap).</td><td>Backend CPU</td><td><code>utils.py</code>, <code>config.py</code></td></tr>
+<tr><td>4. Embedding</td><td>Each chunk is converted to a vector by <code>granite-embedding-278m-multilingual</code>.</td><td>Backend CPU</td><td><code>opensearch_utils.py</code></td></tr>
+<tr><td>5. Indexing</td><td>Vectors are stored in OpenSearch, one index per user (plus a separate one for images).</td><td>OpenSearch</td><td><code>opensearch_utils.py</code></td></tr>
+<tr><td>6. Image handling</td><td>Images get a text caption (BLIP, with an attempt at a Granite Vision model first) and a CLIP embedding.</td><td>Backend CPU (GPU if present)</td><td><code>opensearch_utils.py</code> (<code>ImageRAG</code>)</td></tr>
+<tr><td>7. Retrieval</td><td>The question is embedded and the 5 most similar chunks are fetched; duplicates are removed. One image caption may be added.</td><td>Backend CPU + OpenSearch</td><td><code>opensearch_utils.py</code>, <code>server.py</code></td></tr>
+<tr><td>8. Prompt building</td><td>Language of the question is detected; the chunks and question are placed in a language-specific instruction ("answer only from the context").</td><td>Backend CPU</td><td><code>rag.py</code></td></tr>
+<tr><td>9. Generation</td><td>The prompt is streamed to Granite 3.3-8B at temperature 0.</td><td><strong>Spyre (RHAIIS)</strong></td><td><code>rhaiis_utils.py</code></td></tr>
+</table>
+<div class="box">
+  <strong>Where Spyre is actually used:</strong> only stages 2 and 9 &mdash; the language-model calls. The solution documents describe Spyre
+  as also accelerating extraction, chunking, embeddings and search; in the code those run on the ordinary CPU. That is a sensible
+  choice for this platform (Spyre is dedicated to the large model), but it means the CPU side must be kept lean.
+</div>
+
+<!-- ============================================================ -->
+<h2>9.2 &nbsp;How well does this solve the intended purpose?</h2>
+<p>The stated purpose is to let users upload documents, get a role-appropriate summary, and then chat with their documents and get traceable answers.</p>
+<table>
+<tr><th>Purpose element</th><th>How the AI serves it</th><th>Verdict</th></tr>
+<tr><td>Answers grounded in the user's own documents</td><td>RAG with an "answer only from the context, otherwise say so" instruction and temperature 0.</td><td>Good approach; sound foundation.</td></tr>
+<tr><td>Private, per-user knowledge</td><td>Separate OpenSearch index per user; retrieval can be restricted to chosen documents.</td><td>Good (assuming user identity is trustworthy &mdash; see chapter 6).</td></tr>
+<tr><td>Multilingual use</td><td>Multilingual embedding model plus hand-written instructions for 7 languages.</td><td>Good design, but summaries always use the English prompt because of the list-vs-string bug, and no multilingual testing exists.</td></tr>
+<tr><td>Meaningful summaries</td><td>One LLM call on the first 16,000 characters of the document.</td><td><strong>Weak for long documents</strong> &mdash; everything after the start is silently ignored. The client cuts the prompt again to 10,000 characters.</td></tr>
+<tr><td>Role-aware summaries (Admin/User)</td><td>The role toggle exists in the UI but never reaches the prompt.</td><td>Not delivered.</td></tr>
+<tr><td>Traceable / cited answers</td><td>Source file names are collected, but the final prompt builder drops the "Excerpt from &lt;file&gt;" labels, so the model never sees them and cannot cite.</td><td>Not delivered (small fix).</td></tr>
+<tr><td>Conversational chat</td><td>Each question is answered on its own; no previous turns are sent.</td><td>Follow-ups such as "and what about the second one?" will fail.</td></tr>
+<tr><td>Image-aware answers</td><td>Images are turned into captions; chat uses only the caption text.</td><td>Works for simple "what is in this picture" cases; cannot read text or detail not present in the caption.</td></tr>
+<tr><td>Guardrails</td><td>Only the single "answer from context" instruction.</td><td>No real guardrails; document text goes straight into the prompt (prompt-injection exposure).</td></tr>
+<tr><td>Spyre acceleration</td><td>LLM generation only.</td><td>Appropriate, but over-claimed in the docs.</td></tr>
+</table>
+
+<h3>Strengths worth keeping</h3>
+<ul>
+  <li><strong>Temperature 0 and a "context only" instruction</strong> &mdash; right choice for factual document Q&amp;A and for reproducible results.</li>
+  <li><strong>A multilingual embedding model</strong> so a French question can find an English passage.</li>
+  <li><strong>Streaming responses</strong> &mdash; the user sees the first words quickly even if the whole answer takes time.</li>
+  <li><strong>De-duplication of retrieved chunks</strong> so overlapping text does not waste prompt space.</li>
+  <li><strong>Document-scoped retrieval</strong> &mdash; the user can restrict a question to selected files.</li>
+  <li><strong>A modest embedding model (278M parameters)</strong> &mdash; light enough for CPU; no need to change it.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>9.3 &nbsp;Where the AI layer is weak</h2>
+
+<div class="box warn">
+  <strong>The biggest single mismatch: the prompt is sized for a much larger window than the platform has.</strong>
+  The model is served with a 2,048-token window (roughly 1,500 English words, <em>including</em> the answer). The code allows prompts of up to
+  10,000 characters (about 2,500 tokens) and asks for up to 10,000 generated tokens. Five chunks of 25 lines plus an image caption can easily fill or
+  exceed the window. When the limit is hit, the code cuts the prompt by characters from the end &mdash; which removes exactly the part that
+  matters most: the question and the "Answer:" cue. The outcome would be a request rejected by the server or an answer to a half-read prompt.
+</div>
+
+<table>
+<tr><th>#</th><th>Weakness</th><th>Effect</th><th>Files</th></tr>
+<tr><td>1</td><td><strong>Embedding model reloaded on every question</strong> (and on every ingest). The same happens to the CLIP image model for each upload, caption and chat request; the caption loader also first tries a heavier Granite Vision model before falling back to BLIP.</td><td>Large avoidable CPU time and memory churn per request, with the s390x CPU doing the work; the main source of chat latency that has nothing to do with the LLM.</td><td><code>opensearch_utils.py</code>, <code>server.py</code></td></tr>
+<tr><td>2</td><td><strong>Prompt limit counted in characters, not tokens</strong>, and larger than the model window.</td><td>Truncation of the question; possible request failures; unpredictable behaviour for non-English text, which uses more tokens per character.</td><td><code>rhaiis_utils.py</code>, <code>rag.py</code></td></tr>
+<tr><td>3</td><td><strong>Chunking by 25 lines</strong>, not by meaning or size.</td><td>A "line" can be a whole paragraph (PDF text) or a single word (tables). Chunks are then either enormous or meaningless, which harms both retrieval quality and the token budget. The documents promise "semantically meaningful" chunks.</td><td><code>utils.py</code>, <code>config.py</code></td></tr>
+<tr><td>4</td><td><strong>Whole document stored inside every chunk's metadata.</strong></td><td>Index size grows with (chunks &times; document size). A 100-chunk document is stored roughly 100 times over; wasteful for storage and for every search response.</td><td><code>opensearch_utils.py</code></td></tr>
+<tr><td>5</td><td><strong>Source labels removed before the model sees the context.</strong></td><td>No citations possible; the "traceable answers" claim is unmet.</td><td><code>rag.py</code>, <code>server.py</code></td></tr>
+<tr><td>6</td><td><strong>Fixed top-5 retrieval, no relevance threshold.</strong></td><td>Always returns five chunks even when none is relevant, so the model is fed noise; for broad questions five may be too few. Retrieval relies on vector similarity only, which is weak for exact names, codes and numbers.</td><td><code>opensearch_utils.py</code>, <code>server.py</code></td></tr>
+<tr><td>7</td><td><strong>No conversation memory.</strong></td><td>Follow-up questions retrieve and answer without context.</td><td><code>server.py</code>, <code>rag.py</code>, frontend chat tab</td></tr>
+<tr><td>8</td><td><strong>Single-pass summary of the first 16,000 characters.</strong></td><td>Long documents are summarised from their start only, with no warning; and the summary is produced before the document is stored, so a slow model call delays the whole upload.</td><td><code>rag.py</code>, <code>server.py</code></td></tr>
+<tr><td>9</td><td><strong>Image search runs on every question</strong> by default, even for clearly text-only questions.</td><td>Extra CLIP encoding and a second OpenSearch query per chat turn on the CPU.</td><td><code>server.py</code>, <code>opensearch_utils.py</code></td></tr>
+<tr><td>10</td><td><strong>No limit on simultaneous model calls.</strong></td><td>The model server handles only 4 requests at once. Extra requests queue or time out (300 s) with no retry for the streaming path. Several users uploading documents (each triggering a summary) can starve the chat.</td><td><code>rhaiis_utils.py</code>, <code>server.py</code></td></tr>
+<tr><td>11</td><td><strong>Retrieved text is not fenced off as data.</strong></td><td>A document containing "ignore previous instructions&hellip;" may steer the answer. No input/output checks beyond this.</td><td><code>rag.py</code></td></tr>
+<tr><td>12</td><td><strong>No way to measure quality</strong>; whole prompts and answers are printed to logs.</td><td>Changes cannot be shown to improve or harm answers; logs risk exposing confidential document text.</td><td><code>rhaiis_utils.py</code>, <code>server.py</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>9.4 &nbsp;Improvements that fit the platform</h2>
+<p>
+  The improvements are grouped by what they fix. All are changes to <em>how</em> the existing model and data are used. None needs a larger or additional language model,
+  and several actually <strong>reduce</strong> the processing the system does today.
+</p>
+
+<h3>A. Make the existing work cheaper (do these first)</h3>
+<table>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Cost</th><th>Files</th></tr>
+<tr>
+  <td><strong>A1. Load models once</strong></td>
+  <td>Create the embedding model and the CLIP/caption models once when the server starts (or on first use) and reuse them for all requests.</td>
+  <td>Removes the repeated model loading from every chat turn, ingest and image upload. Frees CPU for real work and shortens answers noticeably, with identical results.</td>
+  <td><span class="tag c0">NO EXTRA COST</span> (saves CPU; one set of models stays in memory)</td>
+  <td><code>opensearch_utils.py</code>, <code>server.py</code></td>
+</tr>
+<tr>
+  <td><strong>A2. Store the document once</strong></td>
+  <td>Keep the full text in the document database (MongoDB already has it) and keep only the chunk text and a document reference in each index entry.</td>
+  <td>Much smaller index, faster searches, lower OpenSearch memory use.</td>
+  <td><span class="tag c0">NO EXTRA COST</span> (saves storage)</td>
+  <td><code>opensearch_utils.py</code></td>
+</tr>
+<tr>
+  <td><strong>A3. Only search images when relevant</strong></td>
+  <td>Search the image index only when images are selected, or when the question mentions things like picture, photo, diagram, chart or screenshot (a simple word check, no model).</td>
+  <td>Text questions skip a CLIP encode and a second search. Also avoids irrelevant image captions being added to the prompt and eating tokens.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>server.py</code></td>
+</tr>
+<tr>
+  <td><strong>A4. Drop the heavy captioning attempt</strong></td>
+  <td>Decide on one captioning model (BLIP is already the working fallback) and load only that.</td>
+  <td>Avoids trying to load a much larger vision model on CPU, then discarding it.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>opensearch_utils.py</code></td>
+</tr>
+<tr>
+  <td><strong>A5. Quiet the logging</strong></td>
+  <td>Log timings, counts and sizes, not the full prompt and answer.</td>
+  <td>Less I/O on every request and no confidential text in logs.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>rhaiis_utils.py</code>, <code>server.py</code></td>
+</tr>
+</table>
+
+<h3>B. Fit the prompt to the 2,048-token window</h3>
+<table>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Cost</th><th>Files</th></tr>
+<tr>
+  <td><strong>B1. Token budget instead of a character cut</strong></td>
+  <td>Decide a budget: for example about 1,200 tokens for context, about 150 for instructions and question, the rest for the answer. Add chunks in relevance order until the budget is full; never cut the question. Set the answer limit to a realistic figure (a few hundred tokens), not 10,000.</td>
+  <td>Requests always fit; the question is never lost; answers are predictable. A shorter maximum answer also frees the model's slot sooner for other users.</td>
+  <td><span class="tag c1">SMALL</span> (counting tokens with the model's tokenizer is cheap; an approximation is acceptable)</td>
+  <td><code>rhaiis_utils.py</code>, <code>rag.py</code>, <code>config.py</code></td>
+</tr>
+<tr>
+  <td><strong>B2. Chunk by size and structure</strong></td>
+  <td>Split at paragraph and sentence boundaries to a target of roughly 150&ndash;250 tokens with a small overlap; keep headings with their text; keep table rows together. Chunking is plain text processing and does not use any model.</td>
+  <td>Retrieved chunks are coherent, similar in size and fit the budget; better matches for the embedding model. Delivers the "semantically meaningful chunking" the documents promise.</td>
+  <td><span class="tag c1">SMALL</span> (one-off at ingest; existing documents would need re-indexing)</td>
+  <td><code>utils.py</code>, <code>config.py</code></td>
+</tr>
+<tr>
+  <td><strong>B3. Use fewer, better chunks</strong></td>
+  <td>With a ~1,200-token context and ~200-token chunks, about 4&ndash;6 chunks fit. Keep k around 4, retrieve a few more candidates and then keep only those that pass a minimum similarity.</td>
+  <td>Less noise in the prompt, fewer wrong answers, shorter prompts and faster first token.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>opensearch_utils.py</code>, <code>server.py</code></td>
+</tr>
+</table>
+
+<h3>C. Make answers better and traceable</h3>
+<table>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Cost</th><th>Files</th></tr>
+<tr>
+  <td><strong>C1. Keep source labels in the prompt and return them</strong></td>
+  <td>Give each chunk a short tag such as "[1] report.pdf" in the prompt, ask the model to refer to them, and send the list of sources back to the UI next to the answer.</td>
+  <td>Delivers the traceability promised in the documents; users can verify answers; hallucinations are easier to spot.</td>
+  <td><span class="tag c1">SMALL</span> (a few extra tokens per chunk)</td>
+  <td><code>rag.py</code>, <code>server.py</code>, frontend chat tab</td>
+</tr>
+<tr>
+  <td><strong>C2. "Not found" path</strong></td>
+  <td>If no chunk passes the similarity threshold, answer immediately that nothing relevant was found, <em>without calling the model</em>.</td>
+  <td>Avoids confident-sounding wrong answers and saves a full model call.</td>
+  <td><span class="tag c0">NO EXTRA COST</span> (saves a model call)</td>
+  <td><code>server.py</code>, <code>opensearch_utils.py</code></td>
+</tr>
+<tr>
+  <td><strong>C3. Hybrid search (keyword + vector)</strong></td>
+  <td>OpenSearch can combine ordinary keyword (BM25) scoring with the vector score in one query. No additional model is needed.</td>
+  <td>Much better at exact names, IDs, part numbers, acronyms and figures, where pure vector search is weakest. Typical document Q&amp;A needs both.</td>
+  <td><span class="tag c1">SMALL</span> (slightly heavier query on OpenSearch; nothing on the model side)</td>
+  <td><code>opensearch_utils.py</code></td>
+</tr>
+<tr>
+  <td><strong>C4. Short follow-up memory</strong></td>
+  <td>Carry the last one or two question/answer pairs (truncated) into the prompt within the token budget, or rewrite a follow-up into a standalone question using simple rules (for example, prepend the previous question's subject).</td>
+  <td>Follow-up questions work; chat feels like a conversation.</td>
+  <td><span class="tag c1">SMALL</span> (prompt-only; use the standalone-rewrite via the LLM only if needed, as it adds a model call)</td>
+  <td><code>server.py</code>, <code>rag.py</code>, frontend chat tab</td>
+</tr>
+<tr>
+  <td><strong>C5. Fence off retrieved text</strong></td>
+  <td>Wrap the context in clear markers and tell the model that anything inside is quoted material, not instructions. Put the instructions in a proper "system" message instead of a single user message.</td>
+  <td>Reduces the chance a document steers the model; granite models respond better to a system/user split.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>rag.py</code>, <code>rhaiis_utils.py</code></td>
+</tr>
+<tr>
+  <td><strong>C6. Role-aware wording</strong></td>
+  <td>Add a short role clause to the summary and chat instructions (for example "technical administrator" versus "business user") and pass the role from the UI.</td>
+  <td>Delivers the role-aware behaviour described in the solution template.</td>
+  <td><span class="tag c0">NO EXTRA COST</span> (a few tokens)</td>
+  <td><code>rag.py</code>, <code>server.py</code>, frontend</td>
+</tr>
+</table>
+
+<h3>D. Summaries that cover the whole document, within a call budget</h3>
+<table>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Cost</th><th>Files</th></tr>
+<tr>
+  <td><strong>D1. Fix the language choice</strong></td>
+  <td>Make the summary prompt actually use the detected language (the bug noted in chapter 6).</td>
+  <td>Non-English documents get summaries in the right language.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>rag.py</code></td>
+</tr>
+<tr>
+  <td><strong>D2. Tell the user when a summary is partial</strong></td>
+  <td>Say in the result when only the first part of a long document was used.</td>
+  <td>Honest output; nobody relies on a summary that missed 80% of the file.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>rag.py</code>, <code>server.py</code>, frontend</td>
+</tr>
+<tr>
+  <td><strong>D3. Staged (map-reduce) summary for long documents</strong></td>
+  <td>Split the document into a few large sections, summarise each in a short call, then summarise the summaries. <strong>Cap the number of calls</strong> (for example at 4&ndash;6 sections; for longer documents sample evenly across the text) and run them one after another rather than all at once.</td>
+  <td>Summary reflects the whole document, not just the start.</td>
+  <td><span class="tag c2">MODERATE</span> (several model calls per document instead of one)</td>
+  <td><code>rag.py</code>, <code>server.py</code></td>
+</tr>
+<tr>
+  <td><strong>D4. Summarise in the background / on demand</strong></td>
+  <td>Store and index the document first and generate the summary afterwards (or when the user clicks), instead of making the upload wait for the model.</td>
+  <td>Uploads are fast; summary workload no longer competes with chat for the four model slots at the same moment.</td>
+  <td><span class="tag c0">NO EXTRA COST</span> (moves work, adds none)</td>
+  <td><code>server.py</code>, frontend</td>
+</tr>
+</table>
+
+<h3>E. Protect the limited model capacity</h3>
+<table>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Cost</th><th>Files</th></tr>
+<tr>
+  <td><strong>E1. Concurrency gate</strong></td>
+  <td>Allow at most a small number of in-flight model calls from the backend (for example 3, leaving one slot free for chat), queue the rest, and show "busy" instead of timing out after 5 minutes. Use a shorter timeout and a retry on the streaming path.</td>
+  <td>Predictable behaviour under load; chat stays responsive when summaries are running.</td>
+  <td><span class="tag c0">NO EXTRA COST</span></td>
+  <td><code>rhaiis_utils.py</code>, <code>server.py</code></td>
+</tr>
+<tr>
+  <td><strong>E2. Cache</strong></td>
+  <td>Cache query embeddings and the final answer for an identical question against the same documents; invalidate when documents change.</td>
+  <td>Repeated questions (common in demos and review sessions) cost nothing.</td>
+  <td><span class="tag c1">SMALL</span> (a little memory)</td>
+  <td><code>server.py</code>, <code>opensearch_utils.py</code></td>
+</tr>
+<tr>
+  <td><strong>E3. Basic health and metrics</strong></td>
+  <td>Make the RHAIIS health check really call the model server; record time-to-first-token, tokens/s, queue length and retrieval time as counters.</td>
+  <td>Operators can see whether slowness comes from CPU retrieval or from Spyre.</td>
+  <td><span class="tag c1">SMALL</span></td>
+  <td><code>server.py</code>, <code>rhaiis_utils.py</code></td>
+</tr>
+</table>
+
+<h3>F. Know whether it works</h3>
+<table>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Cost</th><th>Files</th></tr>
+<tr>
+  <td><strong>F1. Small evaluation set</strong></td>
+  <td>Keep 20&ndash;30 questions with expected answers or expected source passages on two or three sample documents (including a non-English one). Re-run after each change: did the right chunk get retrieved, was the answer correct, was the prompt within budget. The ROUGE helper already in the code can score summaries.</td>
+  <td>Every improvement above can be shown to help (or not) with evidence. Prevents regressions.</td>
+  <td><span class="tag c1">SMALL</span> (run on demand, not in production)</td>
+  <td>new test folder, <code>rhaiis_utils.py</code> metrics</td>
+</tr>
+</table>
+
+<h3>Not recommended on this platform</h3>
+<table>
+<tr><th>Idea</th><th>Why to avoid it</th></tr>
+<tr><td><span class="tag cx">AVOID</span> A larger or second language model</td><td>The 8B model already needs two Spyre cards and the window is fixed at 2,048 tokens. A bigger model would not fit and is not needed; the weaknesses above are in how it is used.</td></tr>
+<tr><td><span class="tag cx">AVOID</span> A neural re-ranker on every query</td><td>A cross-encoder scoring many candidates on the s390x CPU would add seconds per question. Hybrid search (C3) plus a similarity threshold (B3) gives most of the gain at almost no cost.</td></tr>
+<tr><td><span class="tag cx">AVOID</span> Fine-tuning the model</td><td>Needs data, hardware and time, and is not warranted until an evaluation set (F1) shows that prompt and retrieval changes are insufficient.</td></tr>
+<tr><td><span class="tag cx">AVOID</span> Larger embedding or vision models</td><td>The 278M multilingual embedder is a good balance for CPU. CLIP and BLIP are already the heavy part of the backend; make them load once (A1) rather than replace them.</td></tr>
+<tr><td><span class="tag cx">AVOID</span> Asking the LLM to rewrite every question, grade every chunk, or check every answer</td><td>Each extra "AI helper" call consumes one of only four model slots. Use rules and thresholds first; add a model call only where evaluation proves the need.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>9.5 &nbsp;Suggested order of work</h2>
+<table>
+<tr><th>Step</th><th>Items</th><th>Why in this order</th><th>Net effect on processing</th></tr>
+<tr><td>1</td><td>A1, A2, A3, A4, A5</td><td>Pure savings; no behaviour change the user would notice except speed.</td><td><strong>Reduces</strong> CPU, memory and storage</td></tr>
+<tr><td>2</td><td>B1, B3, C1, C5</td><td>Makes every request fit the window and delivers the missing citations.</td><td>Neutral to slightly lower (shorter prompts and answers)</td></tr>
+<tr><td>3</td><td>D1, D2, C6, C2</td><td>Cheap fixes for visible wrong behaviour (language, partial summary, role, "not found").</td><td>Neutral</td></tr>
+<tr><td>4</td><td>E1, E3, F1</td><td>Protects capacity and gives a way to measure everything that follows.</td><td>Neutral</td></tr>
+<tr><td>5</td><td>B2 (re-chunking), C3 (hybrid)</td><td>Quality gains for retrieval; need re-indexing, so best done once, after the evaluation set exists.</td><td>One-off re-index; negligible at query time</td></tr>
+<tr><td>6</td><td>C4, D4, E2</td><td>Usability and responsiveness once the foundation is stable.</td><td>Small</td></tr>
+<tr><td>7</td><td>D3 (staged summary)</td><td>The only item that adds model calls; add last, with a hard cap, and keep it optional.</td><td>Moderate, capped</td></tr>
+</table>
+
+<div class="box ok">
+  <strong>Bottom line.</strong> The chosen AI approach (RAG over a modest model with a multilingual CPU embedder) is the right shape for this platform and for the stated purpose.
+  The gaps are in the details: the prompt does not respect the model's 2,048-token window, the same models are reloaded for every request, citations and
+  conversation history are missing, and long documents are summarised from their opening pages only. Steps 1 to 4 above can close most of those gaps while using
+  <em>less</em> compute than the application uses today; only the optional staged summary adds model work, and that can be capped.
+</div>
+
+<div class="box note">
+  <strong>Basis of this review:</strong> static reading of the source, configuration and solution template. Estimates such as token counts, chunk sizes and budgets are sizing guidance,
+  not measurements; they should be validated on the actual Spyre deployment with the evaluation set from item F1. No repository code was changed.
+</div>
+
+<div class="pager"><a href="change-review.html">&larr; 8. Change review</a><span></span></div>
+</main>
+<footer>Made with IBM Bob</footer>
+</body></html>

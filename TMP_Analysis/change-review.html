@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Functionality Change Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.6;color:#1f2328;background:#fff}
+nav{background:#161616;padding:0 24px;display:flex;flex-wrap:wrap;gap:4px}
+nav a{color:#c6c6c6;text-decoration:none;padding:12px;font-size:13px}
+nav a:hover{color:#fff}nav a.on{color:#fff;border-bottom:2px solid #3b82d4}
+main{max-width:900px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:28px;margin:0 0 6px}
+h2{font-size:22px;margin:40px 0 10px;padding-bottom:6px;border-bottom:2px solid #e5e7eb}
+h3{font-size:16px;margin:24px 0 6px;color:#1f2328}
+.sub{color:#57606a;margin:0 0 28px;font-size:15px}
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px}
+th,td{border:1px solid #e5e7eb;padding:8px 11px;text-align:left;vertical-align:top}
+th{background:#f7f8fa;font-weight:600}
+.tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:10px;margin-right:4px;vertical-align:middle}
+.must{background:#ffd7d5;color:#82171a}
+.opt{background:#ddf4ff;color:#0550ae}
+.pill-col{white-space:nowrap}
+.box{background:#f7f8fa;border:1px solid #e5e7eb;border-left:4px solid #3b82d4;padding:12px 16px;margin:20px 0;font-size:14px}
+.warn{border-left-color:#cf222e;background:#fff5f5}
+.note{border-left-color:#9a6700;background:#fffbdd}
+.pager{display:flex;justify-content:space-between;margin-top:48px;font-size:14px}
+footer{text-align:center;font-size:12px;color:#57606a;border-top:1px solid #e5e7eb;padding:14px;margin-top:20px}
+ul{margin:6px 0 6px 20px;padding:0}li{margin-bottom:4px}
+hr.section{border:none;border-top:2px solid #e5e7eb;margin:48px 0 0}
+</style></head><body>
+
+<nav>
+  <a href="index.html">Summary</a>
+  <a href="repository.html">1. Repository &amp; documents</a>
+  <a href="purpose.html">2. Stated purpose</a>
+  <a href="backend.html">3. Backend</a>
+  <a href="frontend-infra.html">4. Frontend &amp; infrastructure</a>
+  <a href="alignment.html">5. Purpose vs. code</a>
+  <a href="issues.html">6. Issues</a>
+  <a href="recommendations.html">7. Recommendations</a>
+  <a class="on" href="change-review.html">8. Change review</a>
+  <a href="ai-review.html">9. AI review</a>
+</nav>
+
+<main>
+<h1>8. Functionality Change Review</h1>
+<p class="sub">
+  A plain-language guide to what must change and what could usefully change.
+  No code is shown — each entry describes a piece of behaviour, the file(s) it lives in, and what effect the change would have.
+  This review is based on static analysis; the application was not built or run.
+</p>
+
+<div class="box warn">
+  <strong>Key:</strong>
+  &nbsp;<span class="tag must">MUST</span> The application will not work correctly, or will fail to start, without this change.
+  &nbsp;<span class="tag opt">OPTIONAL</span> The application runs, but is misleading, fragile, or missing a stated feature.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SECTION 1 — MUST CHANGE
+     ═══════════════════════════════════════════════════════════════ -->
+
+<h2>Section 1 — Changes that must be made</h2>
+<p>These items stop the application from working as described, or introduce a correctness or security failure that makes it unsafe to demonstrate or deploy.</p>
+
+<h3>1.1 &nbsp;Python library imports will crash the server on startup</h3>
+<div class="box warn">
+  <strong>Severity: application does not start.</strong> Importing outdated module paths from LangChain causes Python to throw an error before the web server accepts a single request.
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>The backend uses import paths from LangChain v0.x (pre-2024). These paths were removed in v1.x, which is what a fresh install will pull in.</td>
+  <td>Use the replacement paths that exist in current LangChain. The "Document" data type, the OpenSearch connector, and the embedding model loader all have new locations that are fully equivalent in behaviour.</td>
+  <td><code>server.py</code>, <code>rag.py</code>, <code>opensearch_utils.py</code></td>
+</tr>
+</table>
+
+<h3>1.2 &nbsp;Sentence-transformers and other packages are missing from the dependency list</h3>
+<div class="box warn">
+  <strong>Severity: silent failure at startup; embeddings and image analysis silently unavailable.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>The packages that handle text embeddings, HTTP requests, PDF reading, image processing and score reporting are installed at container startup by a one-liner that ignores errors (<code>pip install … || true</code>). If any fail, the container continues and those features silently break.</td>
+  <td>Every package the code imports must be listed in <code>requirements.txt</code> so that a failed install stops the build rather than producing a broken runtime.</td>
+  <td><code>requirements.txt</code>, <code>docker-compose.yml</code></td>
+</tr>
+</table>
+
+<h3>1.3 &nbsp;Multi-language summary detection always picks English</h3>
+<div class="box warn">
+  <strong>Severity: functional defect — every document is summarised in English regardless of its actual language.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>When building a summary prompt the code runs a language-detection function that returns a ranked list (e.g. "probably English at 93%"). It then compares that entire list object against the string "fr", "de", etc. The comparison is always false, so English is always chosen.</td>
+  <td>Read the top-ranked language from the list and compare that single value. This is exactly what the RAG chat path already does correctly — the fix is to apply the same logic in the summary path.</td>
+  <td><code>rag.py</code> — the summary prompt builder function</td>
+</tr>
+</table>
+
+<h3>1.4 &nbsp;The RHAIIS health check always reports "healthy" and cannot detect a fault</h3>
+<div class="box warn">
+  <strong>Severity: operators cannot detect when the model server is down; all inference errors are masked.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>The health-check endpoint in the backend has a hardcoded private IP address, makes no network call, and always returns "reachable: true". The error-handling code underneath it is dead code.</td>
+  <td>Contact the RHAIIS server at the configured address (already available via an environment variable), call its status endpoint with a short timeout, and return the real result. If the server is unreachable, return an error that the UI can display.</td>
+  <td><code>server.py</code> — the health check endpoint</td>
+</tr>
+</table>
+
+<h3>1.5 &nbsp;The RHAIIS model name, context window and port are inconsistent</h3>
+<div class="box warn">
+  <strong>Severity: requests to the model server will fail if the server is configured as documented, because the client sends the wrong model name and can exceed the context limit.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>The solution template document says to start RHAIIS on port 8000 with a specific model identifier and a 2,048-token context window. The backend code connects to port 9000, uses a different model identifier, and sends prompts that can be up to 10,000 characters long — far exceeding the documented context window.</td>
+  <td>Pick one configuration and make the code and documentation agree. The model name the client sends to RHAIIS must match the <code>--served-model-name</code> flag the model server is started with. The maximum prompt size must not exceed <code>--max_model_len</code>. If the port is 9000, document that.</td>
+  <td><code>rag.py</code>, <code>rhaiis_utils.py</code>, <code>config.py</code>, RHAIIS startup documentation in the solution template</td>
+</tr>
+</table>
+
+<h3>1.6 &nbsp;No server-side authentication — anyone can read or delete any user's documents</h3>
+<div class="box warn">
+  <strong>Severity: data confidentiality failure. Any browser tab can impersonate any user.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>The user's identity is a plain string supplied by the browser. The backend accepts whatever name the client sends and performs all database and index operations under that name. There is no login, no token, and no check that a request genuinely comes from the named user.</td>
+  <td>Authenticate the user (even a simple shared-secret token or Basic Auth would close this gap for a demo). Derive the user identifier on the server side; never trust the client to supply it.</td>
+  <td><code>server.py</code> — all document and query endpoints; <code>mongo_utils.py</code>, <code>opensearch_utils.py</code></td>
+</tr>
+</table>
+
+<h3>1.7 &nbsp;CORS is open with credentials — allows cross-origin data theft</h3>
+<div class="box warn">
+  <strong>Severity: any website can make authenticated requests to the backend on behalf of a logged-in user.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>The backend allows requests from any origin (<code>*</code>) and simultaneously allows credentials. This combination is forbidden by the browser specification and is a known security misconfiguration.</td>
+  <td>Restrict allowed origins to the known frontend address. If it must be open for demonstration purposes, disable credential forwarding.</td>
+  <td><code>server.py</code> — the CORS configuration block</td>
+</tr>
+</table>
+
+<h3>1.8 &nbsp;Uploaded files are written to a shared global temporary path</h3>
+<div class="box warn">
+  <strong>Severity: concurrent uploads from different users can overwrite each other; file names are attacker-controlled.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>Every uploaded file is saved as <code>/tmp/&lt;original filename&gt;</code>. If two users upload a file with the same name at the same time, one overwrites the other. The original filename also controls the disk path, which can be manipulated.</td>
+  <td>Create a unique temporary directory per upload, use an OS-generated temporary file name, and delete the file once processing is complete.</td>
+  <td><code>server.py</code> — the document upload endpoint</td>
+</tr>
+</table>
+
+<h3>1.9 &nbsp;Frontend calls the wrong HTTP method on the user-check endpoint</h3>
+<div class="box warn">
+  <strong>Severity: a "user does not exist" error will appear every time the dashboard first loads in a browser.</strong>
+</div>
+<table>
+<tr><th>What the code does now</th><th>What it should do</th><th>Files affected</th></tr>
+<tr>
+  <td>The dashboard tries a GET request to check whether a user account exists. The backend only defines POST for that endpoint. GET returns HTTP 405 (Method Not Allowed). The frontend then falls back to POST, which works, but an error is logged every single time.</td>
+  <td>Either use POST in the frontend from the start, or add GET support on the backend.</td>
+  <td><code>frontend/src/components/Dashboard.js</code> — the startup user check; <code>server.py</code> — the user-check endpoint</td>
+</tr>
+</table>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SECTION 2 — OPTIONAL / WORTHWHILE
+     ═══════════════════════════════════════════════════════════════ -->
+
+<hr class="section">
+<h2>Section 2 — Changes that would be worthwhile</h2>
+<p>
+  These items do not prevent the demo from running, but they close gaps between what the solution template <em>claims</em> the application does and what it actually does, and they make the application easier to operate and maintain.
+</p>
+
+<h3>2.1 &nbsp;Answers do not cite their sources</h3>
+<p><span class="tag opt">OPTIONAL</span> The solution template describes traceable, cited answers. Currently the chat panel shows the model's response text only. The retrieved document chunks that informed the answer are never surfaced to the user.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>When the RAG pipeline retrieves chunks before sending a prompt, it already knows which document each chunk came from. That metadata can be forwarded alongside the answer to the frontend.</td>
+  <td>Users see "Source: Annual Report 2023, page 4" beneath each answer, matching the product description.</td>
+  <td><code>rag.py</code> — RAG pipeline, <code>server.py</code> — the query endpoint, <code>frontend/src/components/AIChatTab.js</code> — answer display</td>
+</tr>
+</table>
+
+<h3>2.2 &nbsp;Summaries are not role-aware</h3>
+<p><span class="tag opt">OPTIONAL</span> The UI has an "Admin" / "User" toggle, and the solution template mentions role-aware summaries. The toggle is never sent to the backend and the summary prompt makes no distinction.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>The frontend already knows the selected role. Pass it with the summarise request. The backend can then choose a prompt that asks for a detailed technical summary (admin) versus a plain-language overview (user).</td>
+  <td>Different users get summaries appropriate to their needs; the feature the template describes actually exists.</td>
+  <td><code>rag.py</code> — summary prompt builder, <code>server.py</code> — summarise endpoint, <code>frontend/src/components/DocumentTab.js</code> — summarise call</td>
+</tr>
+</table>
+
+<h3>2.3 &nbsp;Text is split by line count, not by meaning</h3>
+<p><span class="tag opt">OPTIONAL</span> The solution template describes "semantically meaningful chunking". The code splits documents into fixed 25-line blocks with a 4-line overlap. This approach cuts sentences and paragraphs in arbitrary places, which degrades retrieval quality.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Replace the fixed-line splitter with a paragraph- or sentence-aware splitter. LangChain's recursive text splitter, which is already a dependency, does this and requires minimal change.</td>
+  <td>Retrieved chunks are coherent units of text, so the model receives better context and gives more accurate answers.</td>
+  <td><code>rag.py</code> — the document chunking function</td>
+</tr>
+</table>
+
+<h3>2.4 &nbsp;Chat history is stored in the browser with no expiry</h3>
+<p><span class="tag opt">OPTIONAL</span> Conversation history for every session is written to <code>localStorage</code>. This data persists indefinitely in the browser, can be read by any script running on the same origin, and is never cleared server-side when a session ends.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Store sessions on the server (in MongoDB, which is already running) and load them by session ID. This also means history persists across devices.</td>
+  <td>Chat history is private to authenticated users, persists correctly, and is not exposed to browser storage risks.</td>
+  <td><code>frontend/src/components/AIChatTab.js</code>, <code>server.py</code>, <code>mongo_utils.py</code></td>
+</tr>
+</table>
+
+<h3>2.5 &nbsp;TLS verification is disabled when calling RHAIIS</h3>
+<p><span class="tag opt">OPTIONAL</span> All HTTP requests to the RHAIIS model server are sent with SSL certificate verification disabled. This makes the connection vulnerable to interception.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Enable verification and supply the CA certificate for the internal cluster (typically via an environment variable or a mounted secret). For a non-TLS RHAIIS endpoint, remove the flag rather than silencing the warning.</td>
+  <td>Communication with the model server is authenticated, which matters in any environment beyond a developer laptop.</td>
+  <td><code>rhaiis_utils.py</code></td>
+</tr>
+</table>
+
+<h3>2.6 &nbsp;No content guardrails on model input or output</h3>
+<p><span class="tag opt">OPTIONAL</span> The solution template mentions guardrails. The only safety mechanism currently present is a performance metrics printer. There is nothing to prevent a user from injecting instructions through an uploaded document that would alter the model's behaviour for other users.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Add at minimum: a maximum input length check, content-type validation on uploaded files, and wrapping of retrieved text so that it is presented to the model as data rather than instructions.</td>
+  <td>The application behaves predictably even with adversarial or malformed documents.</td>
+  <td><code>server.py</code> — upload endpoint, <code>rag.py</code> — prompt builders</td>
+</tr>
+</table>
+
+<h3>2.7 &nbsp;Build and startup take a very long time because of source compilation</h3>
+<p><span class="tag opt">OPTIONAL</span> The Dockerfile compiles PyTorch and Apache Arrow from source for the s390x architecture. This is the correct approach for a platform that lacks pre-built wheels, but it means a full build from scratch takes many tens of minutes and any dependency change forces a full recompile.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Publish the compiled wheels to an internal registry and pull them during the Docker build. Alternatively, publish the compiled base image so only the application layer needs to be rebuilt on each change.</td>
+  <td>Build times drop from hours to minutes for iterative development; the solution template's claim of a ~45-minute deployment becomes realistic.</td>
+  <td><code>Dockerfile</code></td>
+</tr>
+</table>
+
+<h3>2.8 &nbsp;The RHAIIS "Spyre acceleration" claim is not demonstrated in code</h3>
+<p><span class="tag opt">OPTIONAL</span> The solution template states that Spyre accelerates extraction, chunking, embedding generation and vector search. In the code, only LLM inference (text generation) is sent to RHAIIS. Extraction, chunking and embedding all run on the application server CPU. Vector search runs in OpenSearch.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Either: (a) add an embedding endpoint to the RHAIIS deployment and call it from the application instead of running embeddings locally; or (b) update the solution template to accurately describe what Spyre accelerates — which is solely LLM inference.</td>
+  <td>The documented behaviour matches reality. Users and reviewers are not misled.</td>
+  <td><code>opensearch_utils.py</code> — embedding generation; solution template document</td>
+</tr>
+</table>
+
+<h3>2.9 &nbsp;Dependency list is untidy and some packages are unused</h3>
+<p><span class="tag opt">OPTIONAL</span> The requirements file contains packages that do not appear to be imported anywhere in the codebase. This makes builds slower, increases the image size, and creates a larger attack surface for supply-chain vulnerabilities.</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Audit imports against <code>requirements.txt</code>, remove packages that are not used, and pin all remaining packages to specific versions so builds are reproducible.</td>
+  <td>Faster builds, smaller container images, and no surprise breakage when an upstream package releases a new version.</td>
+  <td><code>requirements.txt</code></td>
+</tr>
+</table>
+
+<h3>2.10 &nbsp;Documentation errors reduce usability and credibility</h3>
+<p><span class="tag opt">OPTIONAL</span> Several documentation items are incorrect or inconsistent: the README links to a PDF that is actually a DOCX; the solution template references a different folder name than the actual repository; a command in the template contains a non-ASCII dash that will fail if copied; and the package name in <code>package.json</code> is still the scaffolding default ("my-app").</p>
+<table>
+<tr><th>What it would take</th><th>User-visible benefit</th><th>Files affected</th></tr>
+<tr>
+  <td>Correct the link type in the README, align the folder name in the template, replace the en-dash with a regular hyphen, and set the package name to something meaningful.</td>
+  <td>Someone following the documentation to set up the project will not hit confusing errors on the first attempt.</td>
+  <td><code>README.md</code>, solution template DOCX, <code>frontend/package.json</code></td>
+</tr>
+</table>
+
+<div class="pager"><a href="recommendations.html">&larr; 7. Recommendations</a><a href="ai-review.html">9. AI review &rarr;</a></div>
+</main>
+<footer>Made with IBM Bob</footer>
+</body></html>
